@@ -1,0 +1,70 @@
+{
+  "name": "codex-usage-overlay",
+  "version": "1.1.0",
+  "description": "Codexの利用枠の残りとクレジット残高を表示するWindowsアプリ",
+  "author": "FURU / FURUYAN1234",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": "github:FURUYAN1234/codex-usage-overlay",
+  "main": "dist/main/usage-app.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "smoke": "node --test scripts/usage.test.mjs",
+    "pack": "npm run smoke && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.7",
+    "chokidar": "^4.0.3",
+    "electron-store": "^10.0.1"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.codex.usage-overlay",
+    "productName": "Codex Usage",
+    "electronDist": "node_modules/electron/dist",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release-build"
+    },
+    "files": [
+      "dist/main/usage-app.js",
+      "dist/main/usage-window.js",
+      "dist/main/usage-preload.cjs",
+      "dist/monitor/account-usage.js",
+      "dist/config/store.js",
+      "dist/renderer/usage.html",
+      "dist/renderer/usage.css",
+      "dist/renderer/usage-ui.js",
+      "LICENSE",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

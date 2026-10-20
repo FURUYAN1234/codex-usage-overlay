@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+<title>Codex 残量</title><link rel="stylesheet" href="./usage.css">
+</head><body>
+<header class="titlebar"><div><span class="brand">C</span><h1>Codex 残量</h1></div><div class="window-actions"><button id="pin" aria-pressed="true" title="常に手前に表示">最前面</button><button id="hide" title="トレイに収納" aria-label="トレイに収納">×</button></div></header>
+<main><div class="intro"><p>あと、どれだけ使える？</p><span id="plan"></span></div>
+<section id="buckets" aria-label="利用枠の残り"></section>
+<section class="credit-card" aria-label="クレジット残高"><div class="credit-top"><h2>クレジット残高</h2></div><p id="credits" class="credit-value">取得中…</p><p id="credit-note" class="credit-note">残高情報を確認しています</p></section>
+<p id="error" class="error" role="status" hidden></p></main>
+<footer><div><p id="status" role="status">接続しています…</p><p class="interval">5分ごとに自動更新</p></div><button id="refresh" class="refresh" type="button">更新</button></footer>
+<script type="module" src="./usage-ui.js"></script></body></html>
