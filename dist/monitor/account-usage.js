@@ -7,6 +7,7 @@ const MESSAGES = {
   missing: 'Codexが見つかりません',
   timeout: '取得がタイムアウトしました',
   connection: 'Codexに接続できませんでした',
+  network: 'Codexとの通信が途切れました',
   account: 'Codexの残量を取得できませんでした',
   response: '残量データを確認できませんでした',
   cancelled: '取得を中止しました',
@@ -15,6 +16,16 @@ const MESSAGES = {
 export class UsageReadError extends Error {
   constructor(code) { super(MESSAGES[code] || MESSAGES.response); this.code = code; }
 }
+export function usageErrorMessage(error) {
+  return error instanceof UsageReadError ? MESSAGES[error.code] || MESSAGES.response : MESSAGES.response;
+}
+
+function isTransientReadError(error) {
+  return error?.code === -32603 && typeof error.message === 'string'
+    && /^failed to fetch codex rate limits:/i.test(error.message)
+    && !/\b(?:401|403)\b|unauthori[sz]ed|forbidden|authenticat|invalid.*token|certificate|unknown issuer/i.test(error.message)
+    && /error sending request|incomplete message|connection (?:closed|reset)|timed? out/i.test(error.message);
+}
 
 // This is the sole RPC construction boundary. No generation, account change,
 // purchase, message or reset-redemption method can pass it.
@@ -22,7 +33,7 @@ export function makeReadRequest(method, id) {
   if (!['initialize', 'account/rateLimits/read'].includes(method)) throw new Error('RPC method not allowed');
   if (!Number.isSafeInteger(id)) throw new Error('RPC id not allowed');
   return method === 'initialize'
-    ? { id, method, params: { clientInfo: { name: 'codex-usage-overlay', title: 'Codex 残量', version: '1.1.0' } } }
+    ? { id, method, params: { clientInfo: { name: 'codex-usage-overlay', title: 'Codex 残量', version: '1.1.1' } } }
     : { id, method };
 }
 
@@ -88,7 +99,7 @@ export async function resolveCodexExecutable() {
   throw new UsageReadError('missing');
 }
 
-export async function readAccountUsage({ executable, spawnProcess = spawn, timeoutMs = 60000, closeTimeoutMs = 2000, signal } = {}) {
+export async function readAccountUsage({ executable, spawnProcess = spawn, timeoutMs = 60000, closeTimeoutMs = 2000, retryDelayMs = 500, signal } = {}) {
   const command = executable || await resolveCodexExecutable();
   if(signal?.aborted)throw new UsageReadError('cancelled');
   return new Promise((resolve, reject) => {
@@ -97,12 +108,16 @@ export async function readAccountUsage({ executable, spawnProcess = spawn, timeo
     let buffer = '';
     let stage = 'initialize';
     let timer;
+    let retryTimer;
+    let readAttempts=0;
+    let readId=1;
     let exited=false;
     const abort=()=>finish(new UsageReadError('cancelled'));
     const finish = (error, value) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearTimeout(retryTimer);
       signal?.removeEventListener('abort',abort);
       const settle=()=>error?reject(error):resolve(value);
       try{child?.stdin?.end();}catch{}
@@ -112,6 +127,11 @@ export async function readAccountUsage({ executable, spawnProcess = spawn, timeo
       try{child.kill();}catch{}
     };
     const send = (method, id) => child.stdin.write(JSON.stringify(makeReadRequest(method, id)) + '\n');
+    const sendRead = () => {
+      if(finished||readAttempts>=3)return;
+      readAttempts++;readId++;stage='read';
+      try{send('account/rateLimits/read',readId);}catch{finish(new UsageReadError('connection'));}
+    };
     try {
       child = spawnProcess(command, ['app-server'], { cwd:tmpdir(),windowsHide: true, stdio: ['pipe','pipe','pipe'] });
       child.stdout.setEncoding('utf8');
@@ -133,9 +153,13 @@ export async function readAccountUsage({ executable, spawnProcess = spawn, timeo
             if (message.error) return finish(new UsageReadError('connection'));
             stage = 'read';
             child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
-            send('account/rateLimits/read', 2);
-          } else if (message.id === 2 && stage === 'read') {
-            if (message.error) return finish(new UsageReadError('account'));
+            sendRead();
+          } else if (message.id === readId && stage === 'read') {
+            if (message.error) {
+              const transient=isTransientReadError(message.error);
+              if(transient&&readAttempts<3){stage='retry';retryTimer=setTimeout(sendRead,retryDelayMs);continue;}
+              return finish(new UsageReadError(transient?'network':'account'));
+            }
             try { finish(null, normalizeUsage(message.result)); }
             catch { finish(new UsageReadError('response')); }
           }

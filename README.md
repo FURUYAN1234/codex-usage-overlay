@@ -34,6 +34,10 @@ Click 「更新」 (Refresh) to fetch the latest values. The app also refreshes 
 
 Available usage windows vary by account. Codex does not always return both five-hour and weekly windows. Missing windows are not filled with invented values, and an unavailable balance is shown as 「取得不可」. If a refresh fails and previous data exists, the app labels it as previously retrieved data.
 
+通信が途中で切れた場合は、1回の更新につき最大3回まで取得を試みます。初回からの待ち時間は合計60秒までです。認証などのエラーは繰り返しません。通信断やタイムアウトは、画面に理由を分けて表示します。
+
+If a connection drops, the app makes up to three read attempts within the original 60-second refresh deadline. Authentication and other permanent errors are not retried. Connection interruptions and timeouts have distinct error messages.
+
 トークン数から残りの割合や料金を推定する機能はありません。
 
 The app does not estimate remaining percentages or costs from token counts.

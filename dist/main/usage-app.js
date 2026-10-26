@@ -2,7 +2,7 @@ import {app,ipcMain,Menu,nativeImage,Tray,globalShortcut} from 'electron';
 import {writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {getConfig,updateConfig} from '../config/store.js';
-import {readAccountUsage} from '../monitor/account-usage.js';
+import {readAccountUsage,usageErrorMessage} from '../monitor/account-usage.js';
 import {createUsageWindow} from './usage-window.js';
 let win,tray,timer;
 let quitting=false,inFlight=null,verified=false;
@@ -17,7 +17,7 @@ async function refresh(){
   state={...state,refreshing:true};publish();
   inFlight=(async()=>{
     try{const data=await readAccountUsage({signal:controller.signal});successfulReads++;state={...state,data,error:null};}
-    catch(error){state={...state,error:error.code==='missing'?'Codexが見つかりません':error.code==='timeout'?'取得がタイムアウトしました':'Codexの残量を取得できませんでした'};}
+    catch(error){state={...state,error:usageErrorMessage(error)};}
     finally{state={...state,refreshing:false};inFlight=null;publish();}
     await verifyOnce();
   })();return inFlight;
@@ -68,7 +68,7 @@ async function verifyOnce(){
   finally{if(state.pinned!==originalPin)togglePin();if(originalVisible){win.show();win.focus();}else win.hide();}
   publish();await pause();const ui=await inspect();
   await writeFile(path.join(directory,'app.png'),(await win.capturePage()).toPNG());
-  await writeFile(path.join(directory,'live-verification.json'),JSON.stringify({observedAt:new Date().toISOString(),visible:win.isVisible(),windowId:win.webContents.id,url:win.webContents.getURL(),bounds:win.getBounds(),state,ui,checks,successfulReads,uiChecksPass:!failure&&Object.keys(checks).length>=14&&Object.values(checks).every(Boolean),failure},null,2));
+  await writeFile(path.join(directory,'live-verification.json'),JSON.stringify({observedAt:new Date().toISOString(),processId:process.pid,version:app.getVersion(),visible:win.isVisible(),windowId:win.webContents.id,url:win.webContents.getURL(),bounds:win.getBounds(),state,ui,checks,successfulReads,uiChecksPass:!failure&&Object.keys(checks).length>=14&&Object.values(checks).every(Boolean),failure},null,2));
   if(process.env.CODEX_USAGE_EXIT_AFTER_VERIFY==='1')app.quit();
 }
 if(!app.requestSingleInstanceLock())app.quit();
