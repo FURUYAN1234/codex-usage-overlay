@@ -1,5 +1,6 @@
 *
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/LICENSE
 !/package.json
@@ -19,6 +20,7 @@
 !/dist/renderer/usage-ui.js
 !/scripts/
 !/scripts/usage.test.mjs
+!/scripts/verify_package.py
 !/docs/
 !/docs/assets/
 !/docs/assets/thumbnail.png

@@ -2,16 +2,19 @@ import { spawn } from 'node:child_process';
 import { access, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
+import {createRequire} from 'node:module';
 
+const {version} = createRequire(import.meta.url)('../../package.json');
+export const USAGE_APP_TITLE = 'Codex Usage / Codex 残量';
 const MESSAGES = {
-  missing: 'Codexが見つかりません',
-  timeout: '取得がタイムアウトしました',
-  connection: 'Codexに接続できませんでした',
-  network: 'Codexとの通信が途切れました',
-  account: 'Codexの残量を取得できませんでした',
-  response: '残量データを確認できませんでした',
-  cancelled: '取得を中止しました',
-  cleanup: '取得用プロセスの終了を確認できませんでした'
+  missing: 'Codex not found / Codexが見つかりません',
+  timeout: 'Request timed out / 取得がタイムアウトしました',
+  connection: 'Could not connect to Codex / Codexに接続できませんでした',
+  network: 'Connection interrupted / Codexとの通信が途切れました',
+  account: 'Could not fetch Codex usage / Codexの残量を取得できませんでした',
+  response: 'Could not read usage data / 残量データを確認できませんでした',
+  cancelled: 'Request canceled / 取得を中止しました',
+  cleanup: 'Could not confirm helper exit / 取得用プロセスの終了を確認できませんでした'
 };
 export class UsageReadError extends Error {
   constructor(code) { super(MESSAGES[code] || MESSAGES.response); this.code = code; }
@@ -33,7 +36,7 @@ export function makeReadRequest(method, id) {
   if (!['initialize', 'account/rateLimits/read'].includes(method)) throw new Error('RPC method not allowed');
   if (!Number.isSafeInteger(id)) throw new Error('RPC id not allowed');
   return method === 'initialize'
-    ? { id, method, params: { clientInfo: { name: 'codex-usage-overlay', title: 'Codex 残量', version: '1.1.1' } } }
+    ? { id, method, params: { clientInfo: { name: 'codex-usage-overlay', title: USAGE_APP_TITLE, version } } }
     : { id, method };
 }
 
@@ -41,11 +44,10 @@ function windowValue(value) {
   if (!value || typeof value.usedPercent !== 'number' || !Number.isFinite(value.usedPercent)
       || value.usedPercent < 0 || value.usedPercent > 100) return null;
   const minutes = Number.isFinite(value.windowDurationMins) && value.windowDurationMins > 0 ? value.windowDurationMins : null;
-  const label = minutes === 10080 ? '週間枠'
-    : minutes === 300 ? '5時間枠'
-    : minutes && minutes % 1440 === 0 ? `${minutes / 1440}日間枠`
-    : minutes && minutes % 60 === 0 ? `${minutes / 60}時間枠`
-    : minutes ? `${minutes}分間枠` : '利用枠';
+  const label = minutes === 10080 ? 'Weekly window / 週間枠'
+    : minutes && minutes % 1440 === 0 ? `${minutes / 1440}-day window / ${minutes / 1440}日間枠`
+    : minutes && minutes % 60 === 0 ? `${minutes / 60}-hour window / ${minutes / 60}時間枠`
+    : minutes ? `${minutes}-minute window / ${minutes}分間枠` : 'Usage window / 利用枠';
   return { label, usedPercent: value.usedPercent,
     remainingPercent: Math.round((100 - value.usedPercent) * 10) / 10,
     resetsAt: Number.isSafeInteger(value.resetsAt) && value.resetsAt > 0 && Number.isFinite(new Date(value.resetsAt*1000).getTime()) ? value.resetsAt : null };

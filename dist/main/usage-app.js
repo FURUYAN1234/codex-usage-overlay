@@ -2,7 +2,7 @@ import {app,ipcMain,Menu,nativeImage,Tray,globalShortcut} from 'electron';
 import {writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {getConfig,updateConfig} from '../config/store.js';
-import {readAccountUsage,usageErrorMessage} from '../monitor/account-usage.js';
+import {normalizeUsage,readAccountUsage,USAGE_APP_TITLE,UsageReadError,usageErrorMessage} from '../monitor/account-usage.js';
 import {createUsageWindow} from './usage-window.js';
 let win,tray,timer;
 let quitting=false,inFlight=null,verified=false;
@@ -23,11 +23,11 @@ async function refresh(){
   })();return inFlight;
 }
 function rebuildTray(){tray.setContextMenu(Menu.buildFromTemplate([
-  {label:'残量を表示',click:()=>{win.show();win.focus();}},
-  {label:'今すぐ更新',click:()=>void refresh()},
-  {label:'常に手前に表示',type:'checkbox',checked:state.pinned,click:togglePin},
-  {label:'画面中央に戻す',click:()=>{win.center();win.show();win.focus();}},
-  {type:'separator'},{label:'終了',click:()=>app.quit()}
+  {label:'Show usage / 残量を表示',click:()=>{win.show();win.focus();}},
+  {label:'Refresh now / 今すぐ更新',click:()=>void refresh()},
+  {label:'Always on top / 常に手前に表示',type:'checkbox',checked:state.pinned,click:togglePin},
+  {label:'Center window / 画面中央に戻す',click:()=>{win.center();win.show();win.focus();}},
+  {type:'separator'},{label:'Quit / 終了',click:()=>app.quit()}
 ]));}
 function trayImage(){
   const pixels=Buffer.alloc(32*32*4);
@@ -41,7 +41,8 @@ async function verifyOnce(){
   if(!directory||verified||!win||!win.isVisible())return;
   verified=true;await mkdir(directory,{recursive:true});
   const pause=()=>new Promise(resolve=>setTimeout(resolve,120));
-  const inspect=()=>win.webContents.executeJavaScript(`({title:document.title,text:document.body.innerText,overflow:document.documentElement.scrollWidth>innerWidth,refreshDisabled:document.querySelector('#refresh').disabled,quotaCount:document.querySelectorAll('.quota').length,numbers:[...document.querySelectorAll('.number')].map(e=>e.textContent),credits:document.querySelector('#credits').textContent,errorVisible:!document.querySelector('#error').hidden,status:document.querySelector('#status').textContent,pin:document.querySelector('#pin').getAttribute('aria-pressed')})`);
+  const inspect=()=>win.webContents.executeJavaScript(`({title:document.title,text:document.body.innerText,overflow:[document.documentElement,...document.querySelectorAll('main,header,footer,.quota')].some(e=>e.scrollWidth>e.clientWidth),mainScroll:document.querySelector('main').scrollHeight>document.querySelector('main').clientHeight,refreshDisabled:document.querySelector('#refresh').disabled,quotaCount:document.querySelectorAll('.quota').length,numbers:[...document.querySelectorAll('.number')].map(e=>e.textContent),credits:document.querySelector('#credits').textContent,errorVisible:!document.querySelector('#error').hidden,status:document.querySelector('#status').textContent,pin:document.querySelector('#pin').getAttribute('aria-pressed')})`);
+  const capture=async name=>writeFile(path.join(directory,name),(await win.capturePage()).toPNG());
   const checks={};let failure=null;const originalPin=state.pinned,originalVisible=win.isVisible();
   try{
     await pause();let ui=await inspect();
@@ -50,13 +51,41 @@ async function verifyOnce(){
     checks.liveLayout=!ui.overflow&&!ui.refreshDisabled&&ui.quotaCount===windows.length;
     const liveState=structuredClone(state);
     const fixture=async value=>{win.webContents.send('usage:state',value);await pause();return inspect();};
-    ui=await fixture({data:null,refreshing:true,error:null,pinned:state.pinned});checks.loading=ui.text.includes('確認中…')&&!ui.text.includes('100');
-    ui=await fixture({data:null,refreshing:false,error:'取得テスト',pinned:state.pinned});checks.missing=ui.text.includes('取得不可')&&!ui.numbers.includes('100')&&ui.errorVisible;
-    ui=await fixture({...liveState,error:'接続失敗の検証用表示'});checks.stale=ui.status.includes('前回の値')&&ui.errorVisible;
-    const example={...liveState,data:{...liveState.data,buckets:[{id:'fixture',title:'test',primary:{label:'5時間枠',remainingPercent:8,resetsAt:null},secondary:{label:'週間枠',remainingPercent:0,resetsAt:null}}],credits:{kind:'balance',balance:'0'}}};
-    ui=await fixture(example);checks.twoWindows=ui.quotaCount===2&&ui.numbers.join(',')==='8,0'&&ui.credits==='0'&&!ui.overflow;
-    ui=await fixture({...example,data:{...example.data,credits:{kind:'balance',balance:'12345.678900'}}});checks.creditFormat=ui.credits==='12,345.67';
-    ui=await fixture({...example,data:{...example.data,credits:{kind:'unlimited'}}});checks.unlimited=ui.credits==='上限なし';
+    checks.bilingual=ui.title===USAGE_APP_TITLE&&['Usage remaining / 利用枠の残り','Credit balance / クレジット残高','Pin / 最前面','Refresh / 更新','Auto-refresh every 5 min / 5分ごとに自動更新'].every(label=>ui.text.includes(label));
+    ui=await fixture({data:null,refreshing:true,error:null,pinned:state.pinned});
+    checks.loading=ui.text.includes('Checking… / 確認中…')&&ui.refreshDisabled&&!ui.numbers.includes('100');
+    const networkError=usageErrorMessage(new UsageReadError('network'));
+    ui=await fixture({data:null,refreshing:false,error:networkError,pinned:state.pinned});
+    checks.missing=ui.text.includes('Unavailable / 取得不可')&&ui.text.includes(networkError)&&ui.text.includes('Use Refresh to try again.')&&!ui.numbers.includes('100')&&ui.errorVisible;
+    ui=await fixture({...liveState,error:networkError});
+    checks.stale=ui.status.includes('Last values / 前回の値')&&ui.text.includes('Showing the last values.')&&ui.errorVisible;
+    const now=Date.now(),seconds=Math.floor(now/1000);
+    const sample={
+      planType:'plus',
+      primary:{usedPercent:28,windowDurationMins:300,resetsAt:seconds+7200},
+      secondary:{usedPercent:62,windowDurationMins:10080,resetsAt:seconds+259200},
+      credits:{balance:'1250.5678'}
+    };
+    const example={data:normalizeUsage({rateLimits:sample},now),refreshing:false,error:null,pinned:true};
+    ui=await fixture(example);
+    checks.twoWindows=ui.quotaCount===2&&ui.numbers.join(',')==='72,38'&&ui.credits==='1,250.56'
+      &&['5-hour window / 5時間枠','Weekly window / 週間枠','Reset / リセット'].every(label=>ui.text.includes(label))
+      &&!ui.overflow&&!ui.mainScroll;
+    await capture('sample-two-windows.png');
+    const partial={...sample,primary:null,credits:null};
+    ui=await fixture({...example,data:normalizeUsage({rateLimits:partial},now)});
+    checks.oneWindow=ui.quotaCount===1&&ui.credits==='Unavailable / 取得不可'
+      &&ui.text.includes('Other usage windows are unavailable.')&&!ui.overflow&&!ui.mainScroll;
+    await capture('sample-one-window.png');
+    const expired={...sample,primary:{...sample.primary,usedPercent:100,resetsAt:seconds-60},credits:{balance:'0'}};
+    ui=await fixture({...example,data:normalizeUsage({rateLimits:expired},now)});
+    checks.expiredAndZero=ui.numbers[0]==='0'&&ui.credits==='0'&&ui.text.includes('Reset passed, awaiting refresh');
+    const longBalance={...sample,credits:{balance:'12345.678900'}};
+    ui=await fixture({...example,data:normalizeUsage({rateLimits:longBalance},now)});
+    checks.creditFormat=ui.credits==='12,345.67';
+    const unlimited={...sample,credits:{unlimited:true}};
+    ui=await fixture({...example,data:normalizeUsage({rateLimits:unlimited},now)});
+    checks.unlimited=ui.credits==='Unlimited / 上限なし';
     publish();await pause();
     const pinned=state.pinned;await win.webContents.executeJavaScript(`document.querySelector('#pin').click()`);await pause();checks.pin=win.isAlwaysOnTop()!==pinned&&(await inspect()).pin===String(!pinned);
     await win.webContents.executeJavaScript(`document.querySelector('#pin').click()`);await pause();checks.pinRestored=win.isAlwaysOnTop()===pinned;
@@ -67,8 +96,8 @@ async function verifyOnce(){
   }catch(error){failure=String(error?.message||'Verification failed').slice(0,300);}
   finally{if(state.pinned!==originalPin)togglePin();if(originalVisible){win.show();win.focus();}else win.hide();}
   publish();await pause();const ui=await inspect();
-  await writeFile(path.join(directory,'app.png'),(await win.capturePage()).toPNG());
-  await writeFile(path.join(directory,'live-verification.json'),JSON.stringify({observedAt:new Date().toISOString(),processId:process.pid,version:app.getVersion(),visible:win.isVisible(),windowId:win.webContents.id,url:win.webContents.getURL(),bounds:win.getBounds(),state,ui,checks,successfulReads,uiChecksPass:!failure&&Object.keys(checks).length>=14&&Object.values(checks).every(Boolean),failure},null,2));
+  await capture('app.png');
+  await writeFile(path.join(directory,'live-verification.json'),JSON.stringify({observedAt:new Date().toISOString(),processId:process.pid,version:app.getVersion(),visible:win.isVisible(),windowId:win.webContents.id,url:win.webContents.getURL(),bounds:win.getBounds(),state,ui,checks,successfulReads,uiChecksPass:!failure&&Object.keys(checks).length===17&&Object.values(checks).every(Boolean),failure},null,2));
   if(process.env.CODEX_USAGE_EXIT_AFTER_VERIFY==='1')app.quit();
 }
 if(!app.requestSingleInstanceLock())app.quit();
@@ -76,7 +105,7 @@ else{
   app.on('second-instance',()=>{if(win){win.show();win.focus();}});
   app.whenReady().then(()=>{
     const config=getConfig();win=createUsageWindow(config);state.pinned=win.isAlwaysOnTop();
-    tray=new Tray(trayImage());tray.setToolTip('Codex 残量');rebuildTray();
+    tray=new Tray(trayImage());tray.setToolTip(USAGE_APP_TITLE);rebuildTray();
     tray.on('click',()=>win.isVisible()?win.hide():win.show());
     ipcMain.on('usage:ready',event=>{if(allowed(event))publish();});
     ipcMain.on('usage:refresh',event=>{if(allowed(event)){refreshRequests++;void refresh();}});

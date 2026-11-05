@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {PassThrough,Writable} from 'node:stream';
+import {readFileSync} from 'node:fs';
 
 let api = {};
 try { api = await import('../dist/monitor/account-usage.js'); } catch (error) {
@@ -16,8 +17,8 @@ test('remaining percentages, credits and windows come from the account response'
   const result = api.normalizeUsage(response(), now);
   assert.equal(result.buckets[0].primary.remainingPercent,72);
   assert.equal(result.buckets[0].secondary.remainingPercent,38);
-  assert.equal(result.buckets[0].primary.label,'5時間枠');
-  assert.equal(result.buckets[0].secondary.label,'週間枠');
+  assert.equal(result.buckets[0].primary.label,'5-hour window / 5時間枠');
+  assert.equal(result.buckets[0].secondary.label,'Weekly window / 週間枠');
   assert.deepEqual(result.credits,{kind:'balance',balance:'1250.5'});
 });
 test('missing or invalid quota never turns into 100 percent remaining', () => {
@@ -39,7 +40,7 @@ test('unlimited and fractional quota remain accurate', () => {
   implementation();
   const result=api.normalizeUsage(response({primary:{usedPercent:0.5,windowDurationMins:60,resetsAt:null},credits:{unlimited:true}}),now);
   assert.equal(result.buckets[0].primary.remainingPercent,99.5);
-  assert.equal(result.buckets[0].primary.label,'1時間枠');
+  assert.equal(result.buckets[0].primary.label,'1-hour window / 1時間枠');
   assert.equal(result.buckets[0].primary.resetsAt,null);
 });
 test('multiple buckets are distinct and the legacy bucket is not duplicated', () => {
@@ -50,6 +51,15 @@ test('multiple buckets are distinct and the legacy bucket is not duplicated', ()
   assert.deepEqual(result.buckets.map(x=>x.id),['codex','spark']);
   assert.equal(result.buckets[1].primary.remainingPercent,92);
 });
+test('other usage window durations and unknown durations have bilingual labels', () => {
+  for (const [duration, label] of [
+    [2880,'2-day window / 2日間枠'], [120,'2-hour window / 2時間枠'],
+    [90,'90-minute window / 90分間枠'], [undefined,'Usage window / 利用枠']
+  ]) {
+    const result=api.normalizeUsage(response({primary:{usedPercent:20,windowDurationMins:duration}}),now);
+    assert.equal(result.buckets[0].primary.label,label);
+  }
+});
 test('identity and arbitrary backend text never pass to the renderer', () => {
   implementation();
   const input=response(); input.accountId='private-account'; input.email='private@example.com'; input.rawToken='secret';
@@ -58,7 +68,10 @@ test('identity and arbitrary backend text never pass to the renderer', () => {
 });
 test('only initialization and rate-limit reads may be sent to Codex', () => {
   implementation();
-  assert.doesNotThrow(()=>api.makeReadRequest('initialize',1));
+  const {version}=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+  assert.deepEqual(api.makeReadRequest('initialize',1).params.clientInfo,{
+    name:'codex-usage-overlay',title:'Codex Usage / Codex 残量',version
+  });
   assert.doesNotThrow(()=>api.makeReadRequest('account/rateLimits/read',2));
   for(const method of ['turn/start','thread/start','account/logout','account/rateLimitResetCredit/consume','account/sendAddCreditsNudgeEmail']) {
     assert.throws(()=>api.makeReadRequest(method,3),/not allowed/);
@@ -190,8 +203,8 @@ test('the original overall deadline also bounds retry delays',async()=>{
 
 test('public error messages distinguish transport failures and never forward arbitrary errors',()=>{
   assert.equal(typeof api.usageErrorMessage,'function');
-  assert.equal(api.usageErrorMessage(new api.UsageReadError('network')),'Codexとの通信が途切れました');
-  assert.equal(api.usageErrorMessage(new api.UsageReadError('timeout')),'取得がタイムアウトしました');
-  assert.equal(api.usageErrorMessage({code:'network',message:'secret-account-token'}),'残量データを確認できませんでした');
-  assert.equal(api.usageErrorMessage(new Error('secret-account-token')),'残量データを確認できませんでした');
+  assert.equal(api.usageErrorMessage(new api.UsageReadError('network')),'Connection interrupted / Codexとの通信が途切れました');
+  assert.equal(api.usageErrorMessage(new api.UsageReadError('timeout')),'Request timed out / 取得がタイムアウトしました');
+  assert.equal(api.usageErrorMessage({code:'network',message:'secret-account-token'}),'Could not read usage data / 残量データを確認できませんでした');
+  assert.equal(api.usageErrorMessage(new Error('secret-account-token')),'Could not read usage data / 残量データを確認できませんでした');
 });
